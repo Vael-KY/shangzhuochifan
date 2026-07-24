@@ -320,6 +320,7 @@ class MysticLayer:
             "confessions": [], "asked": [], "time_loop_pending": False,
             "unpaid_count": 0, "last_visit_stall": None, "consec_count": 0,
             "unlocked_chains": [], "persistent_stalls": [], "mystic_visit_count": 0,
+            "time_loop_just_happened": False,
         }
         for k, v in default.items():
             if k not in data:

@@ -771,11 +771,10 @@ STALLS = [
             {
                 "affection": 50,
                 "name": "熟人",
-                "reward": {
-                    "type": "recipe",
-                    "recipe": "盐水煎豆腐",
-                    "desc": "教你豆腐盐水泡再煎的诀窍"
-                },
+                # 注：原 reward 引用了不存在的 recipe「盐水煎豆腐」，
+                # 且所有 per-stall milestones 都没被引擎读取（见 market_engine._check_milestones），
+                # 所以这里把整个 reward 留空。要恢复的话需要先在 HIDDEN_RECIPES 加这个菜谱 + 引擎读 STALLS[*].milestones。
+                "reward": None,
             },
             {
                 "affection": 70,
@@ -3305,9 +3304,9 @@ TIMED_ENCOUNTERS = [
     {"id": "winter_dawn_secret", "name": "冬晨的秘密", "condition": {"weather": "晴", "time": "早市", "season": "冬", "min_day": 8}, "chance": 0.15, "text": "天还没全亮，你是第一批到菜场的人。角落里有个老大爷蹲着，面前铺了块布，上面摆着几样你不认识的干货——「这个别处买不到。」", "reward": {"rare_boost": True}},
     {"id": "late_night_confession", "name": "收摊时的掏心话", "condition": {"time": "散市", "any_affection": 70}, "chance": 0.20, "text": "散市了，摊主们在收拾。一个摊主突然跟你说了句掏心话——「其实……我做这个摊子不是因为喜欢。是我妈留下的。她走了以后我就一直守着。」你不知道说什么，就站在那里。过了一会儿他说「走吧，明天再来。」", "reward": {"affection_boost": True}},
     {"id": "lucky_find_in_rain", "name": "雨中意外", "condition": {"weather": "雨", "min_day": 3}, "chance": 0.10, "text": "你低头避雨的时候，脚边踩到一个塑料袋——里面包着一把特别水灵的菜，像是哪个摊主掉的。四下没人认领。", "reward": {"free_quality_item": True}},
-    {"id": "first_snow_market", "name": "初雪飘菜场", "condition": {"weather": "雪", "season": "冬", "min_day": 5}, "chance": 0.20, "text": "今年的第一场雪落在菜场棚顶上，沙沙响。摊主们都仰头看天，难得安静了片刻。何大爷从桶里捞出一条鱼——「头雪的鱼最鲜，给你留的。」他没收钱。", "reward": {"free_quality_item": True, "item_cat": "鱼"}},
-    {"id": "festival_eve_rush", "name": "节前抢手货", "condition": {"near_festival": True, "time": "早市"}, "chance": 0.18, "text": "快过节了，菜场比平时多了一倍的人。你挤到一个摊前，摊主从台面底下摸出一块肉——「藏了半天的，过节了给你留的，别人我都不给。」", "reward": {"rare_boost": True, "item_cat": "肉"}},
-    {"id": "fog_day_secret", "name": "雾天迷路", "condition": {"weather": "雾", "min_day": 3}, "chance": 0.15, "text": "大雾天，菜场里白茫茫一片，连对面摊都看不清。你摸索着往前走，拐进一条从没注意过的过道——尽头有个老太太守着一小筐菌菇，品种你没见过。她只说了一句「雾天才出来。」", "reward": {"rare_boost": True, "item_cat": "菌菇"}},
+    {"id": "first_snow_market", "name": "初雪飘菜场", "condition": {"weather": "雪", "season": "冬", "min_day": 5}, "chance": 0.20, "text": "今年的第一场雪落在菜场棚顶上，沙沙响。摊主们都仰头看天，难得安静了片刻。何大爷从桶里捞出一条鱼——「头雪的鱼最鲜，给你留的。」他没收钱。", "reward": {"free_quality_item": True, "item_cat": "鱼"}, "_disabled": "weather: 雪 never produced by engine (only 晴/阴/雨)"},
+    {"id": "festival_eve_rush", "name": "节前抢手货", "condition": {"near_festival": True, "time": "早市"}, "chance": 0.18, "text": "快过节了，菜场比平时多了一倍的人。你挤到一个摊前，摊主从台面底下摸出一块肉——「藏了半天的，过节了给你留的，别人我都不给。」", "reward": {"rare_boost": True, "item_cat": "肉"}, "_disabled": "engine never sets near_festival"},
+    {"id": "fog_day_secret", "name": "雾天迷路", "condition": {"weather": "雾", "min_day": 3}, "chance": 0.15, "text": "大雾天，菜场里白茫茫一片，连对面摊都看不清。你摸索着往前走，拐进一条从没注意过的过道——尽头有个老太太守着一小筐菌菇，品种你没见过。她只说了一句「雾天才出来。」", "reward": {"rare_boost": True, "item_cat": "菌菇"}, "_disabled": "weather: 雾 never produced by engine (only 晴/阴/雨)"},
     {"id": "loyal_customer_stall", "name": "老主顾的默契", "condition": {"same_stall_visits": 3}, "chance": 0.22, "text": "你又来了，摊主看见你就笑了——「你还真认准我这摊了。」他从筐底下翻出一把菜——「这个我给谁都不卖，就等你的。」", "reward": {"free_quality_item": True}},
     {"id": "pocket_change_find", "name": "兜底翻出来的惊喜", "condition": {"money_low": True}, "chance": 0.18, "text": "你翻遍口袋也没剩几个钱，正准备走。一个摊主叫住你——「别走啊，看你天天来，这几样拿去吧，不收你钱。」他往你袋子里塞了两样菜，摆摆手让你走。", "reward": {"free_quality_item": True, "qty": 2}},
     {"id": "overspent_mercy", "name": "超预算的温柔", "condition": {"over_budget": True, "any_affection": 30}, "chance": 0.16, "text": "你买超了，站在菜场出口数钱，表情不太好。路过的马婶看了一眼——「买多了？」她从围裙兜里掏出两个咸鸭蛋塞给你——「这个送你，别嫌。」", "reward": {"free_quality_item": True, "item_cat": "蛋"}},

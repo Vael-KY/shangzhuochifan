@@ -798,8 +798,11 @@ class MarketGame:
 
         # ── 神秘时空层 ──
         if self.mystic:
-            # 上局结束先清当日标记，再加进度（雨天+2/散市+1）
-            self.mystic.end_of_day_clear()
+            # 时间循环回退时保留回退那天的 mystic 状态（in_mystic/today_stall/today_question/answered）
+            # 否则刚回退就被 end_of_day_clear 清掉，鬼摊再也进不去——而且进度会被二次 tick。
+            if not getattr(self, "_time_loop_just_happened", False):
+                # 上局结束先清当日标记，再加进度（雨天+2/散市+1）
+                self.mystic.end_of_day_clear()
             delta = 1
             if self.weather == "雨":
                 delta += 2
@@ -1154,6 +1157,10 @@ class MarketGame:
         is_regular = vc >= 3
         regular_tier = self._get_regular_tier(stall_id)
 
+        # 喂 mystic 的连访计数器（7 连同摊触发摊主托梦链）
+        if self.mystic:
+            self.mystic.update_visit_streak(stall_id)
+
         # 增量模式：同摊二次进入
         if is_revisit and not COMPACT_MODE:
             # 还是预缓存（可能有新事件影响）
@@ -1245,7 +1252,7 @@ class MarketGame:
 
         # 选择链——带选择的事件
         chain_steps = self._check_choice_chains(stall_id)
-        self._pending_chain_step = None  # 清除上次pending
+        self._pending_chain_steps = []  # 队列：一次访问可能触发多个 chain step
         for step in chain_steps:
             chain = None
             for cid, c in CHOICE_CHAINS.items():
@@ -1255,9 +1262,9 @@ class MarketGame:
             step['_chain_title'] = chain["title"] if chain else "事件"
             lines.append("")
             lines.append(self._format_choice_chain(step))
-            # 保存有选择的步骤，等玩家回应
+            # 保存有选择的步骤，等玩家回应——入队而非覆盖
             if step.get("choices"):
-                self._pending_chain_step = step
+                self._pending_chain_steps.append(step)
 
         # 线索碎片——偶尔发现
         clues = self._maybe_find_clue(stall_id, "visit")
@@ -1282,12 +1289,20 @@ class MarketGame:
             cat_msg = CAT_MESSAGES[self.rng() % len(CAT_MESSAGES)]
             lines.append(f"🐟 {cat_msg}")
 
-        # 摊主故事——随熟客度展开
+        # 摊主故事——随熟客度展开。stories 是按 threshold 升序的。
+        # 旧逻辑用 break，导致高阈值故事永远到不了（低阈值30%命中后就退出）。
+        # 改成找"最匹配的"那条：最高 threshold ≤ vc 的，若 vc 正好等于它就显示，否则 30% 概率。
         stories = STALL_STORIES.get(stall_id, [])
+        chosen = None
         for threshold, story in stories:
-            if vc >= threshold and (vc == threshold or (self.rng() % 100) / 100 < 0.3):
-                lines.append(f"💬 {story}")
-                break  # 每次最多一条故事
+            if vc >= threshold:
+                chosen = (threshold, story)
+            else:
+                break  # stories 升序，越界就不可能再有更高的
+        if chosen:
+            t, s = chosen
+            if vc == t or (self.rng() % 100) / 100 < 0.3:
+                lines.append(f"💬 {s}")
 
         # 路人假情报——生客偶尔碰到（紧凑模式跳过）
         if not COMPACT_MODE and not is_regular and (self.rng() % 100) / 100 < 0.15:
@@ -3105,7 +3120,7 @@ class MarketGame:
         if key_item:
             owner = key_item.get("owner", "")
             quality = key_item.get("quality", "ok")
-            free = key_item.get("free", False)
+            free = key_item.get("_free", False)
             if free:
                 journey_parts.append(f"{owner}送的{key_item['name']}")
             elif quality == "great" and owner:
@@ -5600,16 +5615,18 @@ class MarketGame:
         # 看菜场
         if instruction in ("菜场", "看看", "逛逛", "市场", "看菜场", "看市场", "逛菜场", "逛市场"):
             return self.look_stalls()
-        # 模糊匹配分区
-        if instruction.startswith("去 "):
-            zone_hint = instruction[2:].strip()
-            for zn in ZONE_NAV:
-                if zone_hint in zn or zn.replace("区", "") in zone_hint:
-                    return self.visit_zone(zn)
-
-        # 去某个摊
+        # 去某个摊：精确 stall_id 优先，匹配不上再尝试 zone 模糊。
+        # （旧逻辑 zone 模糊先匹配，会把 id 含区名子串的 stall 误路由成 zone）
         if instruction.startswith("去 "):
             stall_id = instruction[2:].strip()
+            if stall_id in STALL_BY_ID:
+                return self.visit_stall(stall_id)
+            # zone 模糊——必须 zone_hint 非空、且至少 2 字，否则拒绝（避免「区」「菜」等单字命中所有）
+            if len(stall_id) >= 2:
+                for zn in ZONE_NAV:
+                    if stall_id in zn or zn.replace("区", "") in stall_id:
+                        return self.visit_zone(zn)
+            # 都不匹配——交给 visit_stall 让它报"没这个摊"
             return self.visit_stall(stall_id)
 
         # 买——支持批量：「买 番茄 2 鸡蛋 1」
@@ -5825,9 +5842,9 @@ class MarketGame:
         # 选择链回应：「选择 追问」或「选择 1」
         if instruction.startswith("选择 "):
             choice_text = instruction[3:].strip()
-            # 找最近触发的有choices的步骤
-            if hasattr(self, '_pending_chain_step') and self._pending_chain_step:
-                step = self._pending_chain_step
+            # 从队列头取一个待回应的步骤（一次只回应一个，按触发顺序）
+            if hasattr(self, '_pending_chain_steps') and self._pending_chain_steps:
+                step = self._pending_chain_steps[0]
                 choices = step.get("choices", {})
                 # 数字选择
                 try:
@@ -5836,7 +5853,7 @@ class MarketGame:
                     if 0 <= idx < len(keys):
                         choice_key = keys[idx]
                         result = self._handle_choice(step["id"], choice_key)
-                        self._pending_chain_step = None
+                        self._pending_chain_steps.pop(0)
                         return result
                 except ValueError:
                     pass
@@ -5844,7 +5861,7 @@ class MarketGame:
                 for key, choice in choices.items():
                     if choice_text in (key, choice["label"]):
                         result = self._handle_choice(step["id"], key)
-                        self._pending_chain_step = None
+                        self._pending_chain_steps.pop(0)
                         return result
                 return f"没有这个选项。可选：{'、'.join(c['label'] for c in choices.values())}"
 
@@ -6218,6 +6235,9 @@ class MarketGame:
         for te in TIMED_ENCOUNTERS:
             # 同一天内同一奇遇不重复触发
             if te["id"] in already:
+                continue
+            # 数据层标了 _disabled 的：保留叙事素材但永不触发（修复前不可达字段）
+            if te.get("_disabled"):
                 continue
             cond = te["condition"]
             ok = True
