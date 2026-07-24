@@ -142,6 +142,16 @@ class MarketGame:
         self.found_clues = set()  # 已发现的线索碎片id
         self.unlocked_combos = set()  # 已解锁的线索组合
         self.ending = None        # 当前结局id
+        # 以下几项之前只在 from_dict 里初始化；直接 MarketGame() + 手动调
+        # 会触发 AttributeError。现在 __init__ 也补上默认值。
+        self.encyclopedia = {
+            "items_bought": set(), "rare_found": set(),
+            "recipes_unlocked": set(), "areas_found": set(),
+            "milestones_triggered": set(), "encounters_triggered": set(),
+        }
+        self._perks = set()
+        self._state_avoid = []   # 当前回避清单（已买但老婆不喜欢）
+        self._state_craving = [] # 当前馋清单（老婆提示的想吃的）
         self.palate = {           # 他记住的你的口味——初始空白，慢慢学
             "dislikes": {},       # 不吃：菜名→原因
             "loves": {},          # 爱吃：菜名→描述
@@ -2414,6 +2424,16 @@ class MarketGame:
                 matched_names.add(item["name"])
         for alias, full in ALIASES.items():
             if alias in step_text and full not in matched_names:
+                # 防 alias 与全名冲突：若 step_text 已明确包含 full（用户写的"鸡蛋"而不是"鸡"），
+                # 或已 matched_names 里有名字是 alias 的更具体全名（鸡蛋含"鸡"），
+                # 则跳过 alias——避免用户说"打鸡蛋"时被误认成"鸡腿"。
+                full_appears = (full in step_text)
+                covered_by_matched = any(
+                    (alias in mn) and (mn != alias)
+                    for mn in matched_names
+                )
+                if full_appears or covered_by_matched:
+                    continue
                 for item in all_items:
                     if item["name"] == full and item["name"] not in matched_names:
                         used_items.append(item)
@@ -2514,6 +2534,11 @@ class MarketGame:
                         ex_fb = self.mystic.apply_exotic_reveal(item, verb)
                         if ex_fb:
                             feedback.append(ex_fb)
+                    # 神秘时空：旧告白偶尔在做菜时浮回脑中（跨局回忆）
+                    if self.mystic and not item.get("exotic"):
+                        recall = self.mystic.maybe_recall()
+                        if recall:
+                            feedback.append(recall)
                 # 使用升级版反馈——优先食材特有感官
                 fb_key_map = {"洗": "洗好", "切": "切好", "切段": "切好", "切片": "切好",
                               "切丝": "切好", "切块": "切好", "拍": "切好", "剥": "切好",
@@ -3143,6 +3168,16 @@ class MarketGame:
                 drama = self.mystic.apply_exotic_serve(exotic_item)
                 if drama:
                     journey_parts.append(drama)
+            # 旧告白偶尔在端菜时浮回（跨局回忆）
+            else:
+                recall = self.mystic.maybe_recall()
+                if recall:
+                    journey_parts.append(recall)
+        elif self.mystic:
+            # 普通菜（无 exotic）：也允许旧告白浮回
+            recall = self.mystic.maybe_recall()
+            if recall:
+                journey_parts.append(recall)
         # 拼叙事
         if journey_parts:
             narrative = "、".join(journey_parts) + "。"
@@ -6046,6 +6081,10 @@ class MarketGame:
             if not any(c in stall_cats for c in he["stall_cats"]):
                 continue
             if (self.rng() % 100) / 100 < he["chance"]:
+                # 记下 offer 出处的 stall_id，cooldown 要按这个来
+                # （旧逻辑在 _resolve_help 里写 self.current_stall，玩家可能已经换摊了，
+                # 导致 cooldown 记到错摊上）
+                he = {**he, "_stall_id": stall_id}
                 self._pending_help = he
                 opts_text = " | ".join(f"{i+1}.{o['label']}（{o['desc']}）" for i, o in enumerate(he["options"]))
                 return f"🔧 {he['intro']}\n    选择：{opts_text}"
@@ -6060,7 +6099,9 @@ class MarketGame:
         if not hasattr(self, '_help_cooldown'):
             self._help_cooldown = {}
         if self.current_stall:
-            self._help_cooldown[self.current_stall] = self.day
+            # 写 cooldown 到 offer 出处的 stall，而不是玩家回应时的 current_stall
+            offer_stall = he.get("_stall_id") or self.current_stall
+            self._help_cooldown[offer_stall] = self.day
         success = (self.rng() % 100) / 100 < chosen_opt.get("success_rate", 0.5)
         lines = []
         if success:
