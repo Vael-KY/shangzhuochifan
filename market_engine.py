@@ -75,7 +75,7 @@ def _save_dir():
         d = os.getcwd()
     return d
 
-SAVE_FILE = os.path.join(_save_dir(), "market_save.json")
+SAVE_FILE = os.environ.get("MARKET_SAVE_FILE") or os.path.join(_save_dir(), "market_save.json")
 
 # 厨房默认有的调味品（不用买）
 KITCHEN_DEFAULTS = [
@@ -95,10 +95,20 @@ KITCHEN_DEFAULTS = [
 # ---- PRNG (跟钓鱼游戏一样，确定性) ----
 
 def mulberry32(seed):
+    """mulberry32 PRNG。
+
+    旧版先把 seed += 0x6D2B79F5 再算输出，导致 _get_rng_state() 读到的
+    closure cell 是"已 increment 的值"。mulberry32(state) 用这个值新建
+    rng 后第一次调用又 +0x6D2B79F5——跨进程恢复后第一次输出比原序列
+    晚一步（即输出的是「原序列的下一次」而不是「恢复那一刻的下一次」）。
+
+    改成：先用 seed 算输出，再 increment。这样 _get_rng_state 返回的
+    就是"下一次 increment 前的值"，跨进程恢复后第一次输出严格对齐。
+    """
     def _next():
         nonlocal seed
-        seed = (seed + 0x6D2B79F5) & 0xFFFFFFFF
         t = seed
+        seed = (seed + 0x6D2B79F5) & 0xFFFFFFFF
         t = ((t ^ (t >> 15)) * (t | 1)) & 0xFFFFFFFF
         t = ((t ^ (t >> 15)) * (t | 1)) & 0xFFFFFFFF
         t = (t ^ (t >> 15)) & 0xFFFFFFFF
@@ -371,8 +381,18 @@ class MarketGame:
 
     def load(self):
         if os.path.exists(SAVE_FILE):
-            with open(SAVE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            try:
+                with open(SAVE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                # 存档损坏（用户手动改坏了 / 写一半断电 / 编码错位），
+                # 静默当成新档处理，避免游戏卡死打不开。
+                # 删掉坏档免得每次 load 都报错。
+                try:
+                    os.remove(SAVE_FILE)
+                except OSError:
+                    pass
+                data = {}
         else:
             data = {}
         return self.from_dict(data)
@@ -2381,6 +2401,9 @@ class MarketGame:
         step_text = step_text.strip()
         if not step_text:
             return "？"
+        # 标准化：去掉动词和食材之间的空格，让"加 盐"和"加盐"都识别为加盐
+        # （旧逻辑 verb in step_text 对带空格写法静默失败，salt counter 等副作用不触发）
+        normalized = step_text.replace(" ", "").replace("　", "")
 
         ks["steps"].append(step_text)
         feedback = []
@@ -2418,7 +2441,7 @@ class MarketGame:
         # 解析步骤里的关键词——去重
         detected = []
         for verb, tag in COOK_VERBS.items():
-            if verb in step_text:
+            if verb in normalized:
                 detected.append((verb, tag))
         # 去重1：位置重叠时只保留最长的（"切块"吞掉"切"，"加酱油"吞掉"加"）
         detected.sort(key=lambda x: len(x[0]), reverse=True)
@@ -2429,7 +2452,7 @@ class MarketGame:
             start = 0
             idx = -1
             while True:
-                idx = step_text.find(verb, start)
+                idx = normalized.find(verb, start)
                 if idx == -1:
                     break
                 span = (idx, idx + len(verb))
@@ -2471,15 +2494,15 @@ class MarketGame:
         # 先匹配全名，再匹配别名
         matched_names = set()
         for item in all_items:
-            if item["name"] in step_text and item["name"] not in matched_names:
+            if item["name"] in normalized and item["name"] not in matched_names:
                 used_items.append(item)
                 matched_names.add(item["name"])
         for alias, full in ALIASES.items():
-            if alias in step_text and full not in matched_names:
+            if alias in normalized and full not in matched_names:
                 # 防 alias 与全名冲突：若 step_text 已明确包含 full（用户写的"鸡蛋"而不是"鸡"），
                 # 或已 matched_names 里有名字是 alias 的更具体全名（鸡蛋含"鸡"），
                 # 则跳过 alias——避免用户说"打鸡蛋"时被误认成"鸡腿"。
-                full_appears = (full in step_text)
+                full_appears = (full in normalized)
                 covered_by_matched = any(
                     (alias in mn) and (mn != alias)
                     for mn in matched_names
@@ -2497,7 +2520,7 @@ class MarketGame:
         _cat_map = {"肉": "肉", "鱼": "鱼", "鸡": "肉"}  # 模糊词→分类
         missing = set()
         for alias, full in ALIASES.items():
-            if alias in step_text and full not in matched_names and full not in _kitchen_seasoning_names:
+            if alias in normalized and full not in matched_names and full not in _kitchen_seasoning_names:
                 # alias指向的full没买到——但同类里可能有（"肉"没买瘦猪肉，但买了五花肉）
                 cat = _cat_map.get(alias)
                 if cat:
@@ -2507,14 +2530,14 @@ class MarketGame:
                 elif full not in all_names:
                     missing.add(full)
         for vname in VEGGIES:
-            if vname in step_text and vname not in matched_names and vname not in _kitchen_seasoning_names and vname not in all_names:
+            if vname in normalized and vname not in matched_names and vname not in _kitchen_seasoning_names and vname not in all_names:
                 missing.add(vname)
         if missing:
             feedback.append(f"⚠ 没有{'、'.join(missing)}，先去买。")
 
         # 厨房突发状况——根据当前步骤的关键词随机触发
         for acc_id, acc in KITCHEN_ACCIDENTS.items():
-            if acc["trigger"] in step_text:
+            if acc["trigger"] in normalized:
                 if (self.rng() % 100) / 100 < acc["chance"]:
                     line = acc["lines"][self.rng() % len(acc["lines"])]
                     feedback.append(f"⚠ {line}")
@@ -2530,7 +2553,7 @@ class MarketGame:
         detected.sort(key=lambda x: tag_order.get(x[1], 5))
         for verb, tag in detected:
             if tag == "heat":
-                if "热锅" in step_text or "烧油" in step_text or "倒油" in step_text:
+                if "热锅" in normalized or "烧油" in normalized or "倒油" in normalized:
                     ks["heat"] = max(ks["heat"], 2)
                     ks["pot_temp"] = min(ks["pot_temp"] + 1, 3)
                     pool = COOK_STEP_FEEDBACK.get("热锅", ["锅热了。"])
@@ -2614,10 +2637,10 @@ class MarketGame:
                                   "切丝": "切好了。", "切块": "切好了。", "拍": "拍好了。", "剥": "剥好了。",
                                   "腌": "腌上了。", "焯水": "焯好了。", "打散": "打散了。", "沥干": "沥干了。"}
                     feedback.append(default_fb.get(verb, "准备好了。"))
-                if "腌" in step_text:
+                if "腌" in normalized:
                     ks["quality_score"] += 1
                 # 焯水自动开火+加水+推进熟度
-                if "焯水" in step_text:
+                if "焯水" in normalized:
                     if ks["heat"] < 1:
                         ks["heat"] = 3
                         ks["pot_temp"] = 3
@@ -2640,7 +2663,7 @@ class MarketGame:
             elif tag in ("cook",):
                 if ks["pot_temp"] < 1:
                     fire_verbs = {"蒸", "炖", "煮", "煲", "焖", "炸", "煎", "烧", "煸炒", "翻炒", "爆炒", "干煸", "炒"}
-                    if any(v in step_text for v in fire_verbs):
+                    if any(v in normalized for v in fire_verbs):
                         ks["heat"] = max(ks["heat"], 2)
                         ks["pot_temp"] = min(ks["pot_temp"] + 1, 2)
                         feedback.append("开火了。")
@@ -2748,12 +2771,12 @@ class MarketGame:
                              "加料酒": "加料酒。", "加蚝油": "加蚝油。", "加淀粉": "勾芡。", "调味": "调味。"}
                 feedback.append(season_fb.get(verb, "调味。"))
                 # 盐计数
-                if "加盐" in step_text or "加酱油" in step_text:
+                if "加盐" in normalized or "加酱油" in normalized:
                     ks["_salt_count"] = ks.get("_salt_count", 0) + 1
                     if ks["_salt_count"] >= 3:
                         feedback.append("⚠ 有点咸了。可以加勺水或加点糖压一压。")
                 # 加糖补救咸味（可以在season步骤里同时加）
-                if "加糖" in step_text and ks.get("_salt_count", 0) >= 2:
+                if "加糖" in normalized and ks.get("_salt_count", 0) >= 2:
                     ks["_salt_count"] = max(0, ks["_salt_count"] - 1)
                     ks["quality_score"] += 1
                     feedback.append("糖压了点咸味。能吃。")
@@ -2896,7 +2919,7 @@ class MarketGame:
                 continue
             # 检查触发词
             triggers = skill["trigger"].split("|")
-            if any(t in step_text for t in triggers):
+            if any(t in normalized for t in triggers):
                 # 检查食材匹配
                 if not skill["item"] or any(skill["item"] in item["name"] or
                         (skill["item"] == "绿叶" and VEGGIES.get(item["name"], {}).get("cat") == "绿叶") or
@@ -2962,14 +2985,14 @@ class MarketGame:
             for step in recipe["required"]:
                 if step["id"] not in ks["completed_steps"]:
                     for kw in step["keywords"]:
-                        if kw in step_text:
+                        if kw in normalized:
                             ks["completed_steps"].add(step["id"])
                             break
             # 可选步骤
             for step in recipe.get("optional", []):
                 if step["id"] not in ks["completed_optional"]:
                     for kw in step["keywords"]:
-                        if kw in step_text:
+                        if kw in normalized:
                             ks["completed_optional"].add(step["id"])
                             ks["quality_score"] += step["bonus"]
                             feedback.append(f"（{step['name']}，做得细。）")

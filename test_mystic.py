@@ -5,14 +5,14 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _testutil  # noqa
 import market_data  # noqa
 import market_engine  # noqa
 from market_engine import MarketGame
 
 
 def reset():
-    if os.path.exists("market_save.json"):
-        os.remove("market_save.json")
+    _testutil.reset()
 
 
 def main():

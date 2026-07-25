@@ -47,6 +47,7 @@ class MysticLayer:
             "unlocked_chains": [],        # 已触发的任务线 id
             "persistent_stalls": [],      # 常驻解锁的异宾摊 id
             "mystic_visit_count": 0,      # 累计进异宾摊次数（半夜菜场链用）
+            "time_loop_just_happened": False,  # 时间循环刚发生（头部提示用）
         }
 
     # ---- 进度槽 ----

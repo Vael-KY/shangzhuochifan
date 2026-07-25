@@ -5,6 +5,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _testutil  # noqa
 import market_data  # noqa
 import market_engine  # noqa
 from market_engine import MarketGame
@@ -20,8 +21,7 @@ def main():
             errs.append((name, type(e).__name__, str(e)[:200]))
 
     def new_game(budget=200):
-        if os.path.exists("market_save.json"):
-            os.remove("market_save.json")
+        _testutil.reset()
         g = MarketGame()
         g.cmd("菜场")
         g.budget = budget
