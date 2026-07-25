@@ -1142,7 +1142,7 @@ class MarketGame:
         # ── 消耗时间 ──
         self._tick_time(1)
 
-        # ── 好感里程碑 ──
+        # ── 好感里程碑（顶层 AFFECTION_MILESTONES + 每摊自定义 milestones） ──
         milestone_lines = []
         for ms in self._check_milestones(stall_id):
             milestone_lines.append(f"🔓 {ms['trigger_text']}")
@@ -1150,6 +1150,9 @@ class MarketGame:
             if "recipe" in reward:
                 rname = reward["recipe"]
                 milestone_lines.append(f"   获得隐藏菜谱：{rname}！")
+        # per-stall milestones（旧数据是 STALLS[*].milestones，48 条之前全死代码）
+        for ms in self._check_per_stall_milestones(stall_id):
+            milestone_lines.append(f"🎁 {ms.get('desc', '摊主给你留了份心意')}")
 
         # ── 限时奇遇 ──
         encounter_lines = []
@@ -1657,6 +1660,15 @@ class MarketGame:
 
         # 总价 = 原价 + 各种额外费用
         price = base_price + weight_extra + unit_extra
+
+        # per-stall milestone 的折扣（aff20+ 触发：抹零头 3-5%）
+        discount = stall.get("_discount", 0)
+        if discount:
+            price = round(price * (1 - discount), 1)
+
+        # perk：liujie_honest_scale → 刘姐秤给你多两钱（在 root_1 买菜时 8% 折扣）
+        if "liujie_honest_scale" in self._perks and stall.get("owner") == "刘姐":
+            price = round(price * 0.92, 1)
 
         self.spent = round(self.spent + price, 1)
         self.basket.append({
@@ -6277,6 +6289,73 @@ class MarketGame:
                 self._add_owner_memory(stall_id, "milestone", ms.get("trigger_text", ""))
                 if "item" in reward:
                     self._add_owner_memory(stall_id, "gave_freebie", ri["name"])
+        return newly_triggered
+
+    def _check_per_stall_milestones(self, stall_id):
+        """处理 STALLS[*].milestones 里的 48 条 per-stall milestone（旧数据全死代码）。
+
+        顶层 AFFECTION_MILESTONES 只有 5 条，剩下 48 条都挂在 STALLS 里、
+        之前完全没人读。这里只接"安全"的 reward 类型，复杂类型（secret/recipe）
+        检查目标有效性再触发，避免炸引擎。
+        """
+        if not hasattr(self, "_per_stall_ms_triggered"):
+            self._per_stall_ms_triggered = set()
+        newly_triggered = []
+        stall = STALL_BY_ID.get(stall_id)
+        if not stall:
+            return newly_triggered
+        affection = self._get_affection(stall_id)
+        owner = stall.get("owner", "摊主")
+        for ms in stall.get("milestones", []):
+            # 用 (stall_id, affection) 作为唯一 key（per-stall 数据没有 id 字段）
+            ms_key = (stall_id, ms.get("affection"))
+            if ms_key in self._per_stall_ms_triggered:
+                continue
+            if affection < ms.get("affection", 999):
+                continue
+            reward = ms.get("reward") or {}
+            rtype = reward.get("type")
+            rvalue = reward.get("value")
+            rdesc = reward.get("desc", "摊主给了你一份心意")
+            # 只处理安全的 reward 类型；其他先标触发但不执行动作
+            if rtype == "discount":
+                # 抹零头 / 折扣：把折扣值记到 stall._discount 里，买菜时用
+                if not hasattr(stall, "_discount"):
+                    stall["_discount"] = 0.0
+                if rvalue and rvalue > stall["_discount"]:
+                    stall["_discount"] = rvalue
+            elif rtype == "free_item":
+                # 免费给一样东西（rvalue 是食材名）
+                if rvalue and rvalue in VEGGIES:
+                    self.basket.append({
+                        "name": rvalue, "quality": "great", "qty": 1,
+                        "price": 0, "stall": stall_id, "owner": owner, "_free": True,
+                    })
+                    self.encyclopedia["items_bought"].add(rvalue)
+            elif rtype == "perk":
+                # 写入 _perks 集合（后续 perk 行为在用到时查 _perks）
+                if rvalue:
+                    self._perks.add(rvalue)
+            elif rtype == "recipe":
+                # 解锁菜谱——先校验菜谱存在
+                if rvalue and rvalue in HIDDEN_RECIPES:
+                    self.unlocked_hidden_recipes.add(rvalue)
+                    self.encyclopedia["recipes_unlocked"].add(rvalue)
+            elif rtype == "item":
+                # 兼容顶层 AFFECTION_MILESTONES 的 {item: {name,...}} 形状
+                ri = reward.get("item")
+                if isinstance(ri, dict) and ri.get("name") in VEGGIES:
+                    self.basket.append({
+                        "name": ri["name"], "quality": ri.get("quality", "ok"),
+                        "qty": ri.get("qty", 1), "price": ri.get("price", 0),
+                        "stall": stall_id, "owner": owner, "_free": True,
+                    })
+                    self.encyclopedia["items_bought"].add(ri["name"])
+            # secret / 未知 type：暂不动作，标触发即可（保留叙事意图）
+            self._per_stall_ms_triggered.add(ms_key)
+            self.encyclopedia["milestones_triggered"].add(f"{stall_id}_{ms.get('affection')}")
+            self._add_owner_memory(stall_id, "milestone", rdesc)
+            newly_triggered.append(ms)
         return newly_triggered
 
     def _check_timed_encounters(self):
