@@ -5711,7 +5711,12 @@ class MarketGame:
         # （旧逻辑 zone 模糊先匹配，会把 id 含区名子串的 stall 误路由成 zone）
         if instruction.startswith("去 "):
             stall_id = instruction[2:].strip()
+            # 精确 stall id：普通摊 + 神秘时空异宾摊 + 秘密区域都要能命中
             if stall_id in STALL_BY_ID:
+                return self.visit_stall(stall_id)
+            if MYSTIC_STALL_IDS and stall_id in MYSTIC_STALL_IDS:
+                return self.visit_stall(stall_id)
+            if stall_id in SECRET_AREAS:
                 return self.visit_stall(stall_id)
             # zone 模糊——必须 zone_hint 非空、且至少 2 字，否则拒绝（避免「区」「菜」等单字命中所有）
             if len(stall_id) >= 2:
