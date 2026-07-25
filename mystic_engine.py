@@ -40,6 +40,7 @@ class MysticLayer:
             "confessions": [],
             "asked": [],
             "time_loop_pending": False,
+            "time_loop_pending_day": -1,  # pending 标记在哪一天被设置的（校验用）
             "unpaid_count": 0,            # 赊账次数（异界收账人任务线）
             "last_visit_stall": None,     # 连买追踪
             "consec_count": 0,            # 连续去同一摊的天数
@@ -98,6 +99,13 @@ class MysticLayer:
         回退1天一次，不连续——清标记后今天可正常推进。
         """
         if not self.state.get("time_loop_pending"):
+            return False, None
+        # 校验 pending 是从「昨天」传下来的，不是更早的脏标记
+        # （旧版 prev_day 参数完全没用，脏存档或长搁置可能让任意天触发回退）
+        pending_day = self.state.get("time_loop_pending_day", -1)
+        if pending_day != -1 and pending_day != prev_day:
+            # pending 太老了——清掉，避免后续触发
+            self.state["time_loop_pending"] = False
             return False, None
         # 清标记——只回退这一次
         self.state["time_loop_pending"] = False
@@ -171,7 +179,9 @@ class MysticLayer:
         lines.append(s["desc"])
         lines.append("")
         # 旧告白浮现——30% 概率冒一句
-        if g.rng() % 100 < 30 and self.state["confessions"]:
+        # 旧版先调 g.rng() 再判 confessions 是否为空，无 confession 时也消耗主 rng，
+        # 污染后续事件的确定性。改成短路 confessions 在前。
+        if self.state["confessions"] and g.rng() % 100 < 30:
             c = self.state["confessions"][-1]
             lines.append(f"💭 {MYSTIC_CONFESS_PREFIX}{c['answer']}")
             lines.append("")
@@ -229,6 +239,7 @@ class MysticLayer:
         })
         # 标记交易成立 → 次日时间循环回退（批3接通）
         self.state["time_loop_pending"] = True
+        self.state["time_loop_pending_day"] = g.day
         lines = []
         lines.append(f"「{text}」")
         lines.append("")
@@ -244,7 +255,10 @@ class MysticLayer:
             return None
         lines = MYSTIC_REVEALS.get(tag, []) or ["这不是这个时空的{item}。"]
         g = self.game
-        idx = g.rng() % len(lines)
+        # 用 verb 做 seed 偏置：相同 tag + 不同 verb (切/洗/剥) 倾向不同文案。
+        # 这样"切"看到"刀回到起点"，"洗"看到"水汽是朝前的"——动词不再被忽略。
+        verb_bias = sum(ord(c) for c in (verb or "")) % max(1, len(lines))
+        idx = (verb_bias + g.rng()) % len(lines)
         name = item.get("name", "食材")
         return f"⚠ {lines[idx].format(item=name)}"
 
@@ -315,14 +329,22 @@ class MysticLayer:
             })
         elif rt == "unlock_persistent_stall":
             sid = r.get("stall")
-            if sid and sid not in self.state["persistent_stalls"]:
+            # 校验 sid 真在 MYSTIC_STALL_BY_ID 里，否则 typo 会让链"完成"但啥也没解锁
+            if sid and sid in MYSTIC_STALL_BY_ID and sid not in self.state["persistent_stalls"]:
                 self.state["persistent_stalls"].append(sid)
+            elif sid and sid not in MYSTIC_STALL_BY_ID:
+                # 脏数据 warning：静默跳过避免打断玩家，但留个标记让
+                # 数据层查得出问题
+                self.state.setdefault("_bad_chain_rewards", []).append(sid)
         elif rt == "jar_hit":
             g.savings = round(g.savings * (1 - r.get("ratio", 0.5)), 1)
 
     # ---- 存档 ----
     def state_for_save(self):
-        return self.state
+        # 深拷贝，避免 caller (to_dict) 误改直接污染 self.state
+        # confessions/asked 等 list 也要深拷贝，否则内层 append 会反向写回
+        import copy
+        return copy.deepcopy(self.state)
 
     def load_state(self, data):
         if not data:

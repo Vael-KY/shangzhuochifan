@@ -870,11 +870,16 @@ class MarketGame:
         if getattr(self, '_time_loop_narrative', None):
             lines.append("")
             lines.append(self._time_loop_narrative)
+        # 清掉 just_happened 标志——独立于叙事，避免脏存档或中间 save
+        # 导致 flag 永远卡着、每次都重新触发的死循环
+        if self.mystic:
             self.mystic.consume_time_loop_flag()
         # 隐藏任务线解锁提示
         for h in getattr(self, '_mystic_chain_hints', []) or []:
             lines.append("")
             lines.append(h)
+        # 提示已经显示过——清空避免下次 new_day 之外的 cmd 又重复提示
+        self._mystic_chain_hints = []
         lines.append(f"菜钱：{self.budget}元")
         # 攒钱罐/结转提示
         carry = getattr(self, '_carry_hint', 0)
@@ -1140,7 +1145,10 @@ class MarketGame:
         self.current_stall = stall_id  # 记住当前摊
 
         # ── 消耗时间 ──
-        self._tick_time(1)
+        # 旧版不接 _tick_time 返回值，market_time 在最后一点时 _tick_time(1)
+        # 会让市场收摊，但 visit 流程已经走到一半、玩家看到摊位内容却买不了。
+        # 接住返回值，时间刚用完就提前提示「只看不买」状态。
+        time_ok = self._tick_time(1)
 
         # ── 好感里程碑（顶层 AFFECTION_MILESTONES + 每摊自定义 milestones） ──
         milestone_lines = []
@@ -1379,6 +1387,11 @@ class MarketGame:
         if encounter_lines:
             for el in encounter_lines:
                 lines.append(el)
+            lines.append("")
+        # 刚收摊提示：visit_stall 进入时 market_time > 0，但 _tick_time(1) 后归零。
+        # 让玩家立刻知道只看不买。
+        if not time_ok:
+            lines.append("⏰ 时间到了！摊主开始收摊——看看可以，买的话来不及了。赶紧「回家」。")
             lines.append("")
         tw = self._time_warning()
         if tw:
