@@ -379,7 +379,10 @@ class MarketGame:
 
     def from_dict(self, data):
         """从dict装回self——load和engine.py共用这一份逻辑。
-        data可以是{}（新档）/旧版本dict/当前版本dict。"""
+        data可以是{}（新档）/None（旧档被删/第一次load）/旧版本dict/当前版本dict。"""
+        # 兼容 None：当作空档（新游戏 + 第一次 load）
+        if data is None:
+            data = {}
         # 版本迁移
         version = data.get("save_version", 1)
         if version < 2:
