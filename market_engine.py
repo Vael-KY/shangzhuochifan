@@ -635,8 +635,11 @@ class MarketGame:
         # 只有真有"昨天"（prev_day>=1）才结转——第一局别凭空发钱
         if _prev_day >= 1:
             leftover = max(0, round(self.budget - self.spent, 1))
-            carry = round(leftover / 2, 1)
-            jar_add = round(leftover - carry, 1)
+            # 旧版用 round(leftover/2, 1) 是银行家舍入（round half to even）：
+            # leftover=0.1 时 carry=0.0（0.05 舍到偶数 0），jar 拿全部，破坏"一半对一半"。
+            # 改用 round half up 等价：先把 leftover 放大 10 倍 round（普通舍入），再除回。
+            carry = round(leftover * 10 / 2) / 10
+            jar_add = round((leftover - carry) * 10) / 10
             self.savings = round(self.savings + jar_add, 1)
         else:
             leftover = carry = jar_add = 0
@@ -772,8 +775,14 @@ class MarketGame:
                 closed_cats = fx.get("closed_cats", [])
                 if closed_cats:
                     for stall in STALLS:
-                        # 用摊位卖的菜的类别匹配，不是用id前缀
-                        stall_cats = set(VEGGIES.get(v, {}).get("cat", "") for v in stall.get("sells", []))
+                        # 用摊位卖的菜的类别匹配，不是用id前缀。
+                        # 注意：wandering stall 的 sells 是 dict（按季节），要按季节取值；
+                        # 否则迭代出"春/夏/秋/冬"键，VEGGIES.get("春") 拿到空 cat，
+                        # 但 set 含 "" 跟任何 closed_cats 都能交上，wandering 就永远关。
+                        sells = stall.get("sells", [])
+                        if isinstance(sells, dict):
+                            sells = sells.get(self.season, []) or []
+                        stall_cats = set(VEGGIES.get(v, {}).get("cat", "") for v in sells)
                         if stall_cats & set(closed_cats):
                             self.closed_stalls.add(stall["id"])
                 # 摊主缺席
