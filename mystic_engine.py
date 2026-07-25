@@ -152,6 +152,15 @@ class MysticLayer:
         # 非神秘时空日东角空着——挡住 today_question=None 渲染
         if not self.state["in_mystic"]:
             return "今天东角什么都没有。那个摊不在。"
+        # 当天只接 today_stall + persistent_stalls（已常驻解锁的）。
+        # 旧版允许任意鬼摊，结果「今天的问题」/「今天的给予」跟进的摊对不上，
+        # 玩家会被换走不属于当前 stall 的 exotic 食材。现在限制：
+        today = self.state.get("today_stall")
+        persistent = self.state.get("persistent_stalls", [])
+        if stall_id != today and stall_id not in persistent:
+            if today:
+                return f"今天东角只有 {MYSTIC_STALL_BY_ID[today]['name']}，别的摊没出来。"
+            return "今天东角什么都没有。"
         # 累计进异宾摊次数（半夜菜场链用）
         self.state["mystic_visit_count"] = self.state.get("mystic_visit_count", 0) + 1
         lines = []
@@ -193,7 +202,12 @@ class MysticLayer:
         # 不强判真假——但空答换不走
         if not text or len(text) < 2:
             return "「说真的。」摊主没动。「空话换不走东西。」"
-        s = MYSTIC_STALL_BY_ID[self.state["today_stall"]]
+        s = MYSTIC_STALL_BY_ID.get(self.state["today_stall"])
+        if not s:
+            # 脏存档：today_stall 已不在 MYSTIC_STALL_BY_ID 里（旧版本/改名/数据迁移）。
+            # 安全降级：当成无事发生，避免 KeyError 打断游戏。
+            self.state["answered"] = True
+            return "「……」摊主没动，好像没听见你说什么。"
         # 存原话
         self.state["confessions"].append({
             "stall": s["id"],
@@ -326,9 +340,3 @@ class MysticLayer:
             if k not in data:
                 data[k] = v
         self.state = data
-
-    # ---- 测试用：强制触发 ----
-    def force_trigger_for_test(self):
-        self.state["progress"] = MYSTIC_THRESHOLD
-        if self.check_trigger():
-            self.on_day_start()

@@ -2204,14 +2204,27 @@ class MarketGame:
             best_score = 0
             for rname, rdata in RECIPES.items():
                 ingredients = rdata.get("ingredients", [])
+                # 菜名里的关键词——按烹饪动词/连词切分（"蒜蓉炒时蔬" → ["蒜蓉","时蔬"]），
+                # 比旧的 2 字滑窗更准，也避免"蓉炒"这种无意义 2 字误命中。
+                # 切点：常见烹饪动词（炒/煎/煮/蒸/炸/炖/烧/凉拌/爆/烩）和"之"的连词。
+                _CUT_CHARS = set("炒煎煮蒸炸炖烧烩爆焖烤煸烹调凉拌溜氽炝之的")
+                tokens = [rname]
+                for cut in _CUT_CHARS:
+                    new_tokens = []
+                    for t in tokens:
+                        new_tokens.extend(t.split(cut))
+                    tokens = new_tokens
+                recipe_keys = [t for t in tokens if len(t) >= 2]
+                # 兼容保留几个关键 3 字片段，处理跨字切完后还是无意义的情况
+                if len(rname) >= 3:
+                    recipe_keys.append(rname[:3])
+                # 去重 + 滤掉 1 字
+                recipe_keys = list({k for k in recipe_keys if len(k) >= 2})
                 if not ingredients:
-                    # 任意蔬菜类菜谱——从菜谱名提取2字以上的关键词
-                    # "蒜蓉炒时蔬" → ["蒜蓉", "时蔬", "蒜蓉炒"]
-                    recipe_keys = [rname[i:i+2] for i in range(len(rname)-1) if len(rname[i:i+2]) >= 2]
-                    recipe_keys = [k for k in recipe_keys if k not in ("炒时", "时蔬")]
+                    # 任意蔬菜类菜谱——用 token 匹配
                     key_match = any(k in approach_text for k in recipe_keys)
                     if key_match:
-                        score = 100  # 做法文本提到菜谱关键词，给最高分
+                        score = 100
                     else:
                         continue
                 else:
@@ -2221,8 +2234,7 @@ class MarketGame:
                     # 做法/手头共同构成"可用食材"
                     usable = all_names | {ing for ing in ingredients if ing in approach_text}
                     ing_hit = sum(1 for ing in ingredients if ing in usable)
-                    # 菜名证据：整名出现在做法里=强(玩家明说要做这道)；2字滑窗=弱
-                    recipe_keys = [rname[i:i+2] for i in range(len(rname)-1)]
+                    # 菜名证据：整名出现=强(玩家明说要做这道)；token 匹配=弱
                     if rname in approach_text:
                         name_score = 100
                     elif any(k in approach_text for k in recipe_keys):
@@ -4341,7 +4353,12 @@ class MarketGame:
 
     def _peek_quality(self, item_name, v):
         """L4细看时预览品质——不影响主rng序列，用独立seed"""
-        peek_seed = (hash(item_name) + self.day + self.seed) & 0xFFFFFFFF
+        # 旧版用 hash(item_name)，Python 默认 hash 跨进程（不同 PYTHONHASHSEED）
+        # 不稳定，导致同一存档在不同进程里细看同一颗菜返回的品质不同。
+        # 改用 hashlib.md5（确定性），截前 4 字节当 seed。
+        import hashlib
+        h = hashlib.md5(item_name.encode("utf-8")).digest()
+        peek_seed = (int.from_bytes(h[:4], "little") + self.day + self.seed) & 0xFFFFFFFF
         peek_rng = mulberry32(peek_seed)
         r = (peek_rng() % 100) / 100
         is_in = v["season"].get(self.season, "no") == "in"
