@@ -152,6 +152,9 @@ class MarketGame:
         self._perks = set()
         self._state_avoid = []   # 当前回避清单（已买但老婆不喜欢）
         self._state_craving = [] # 当前馋清单（老婆提示的想吃的）
+        # 选择链多步触发队列：visit_stall 会重置，旧版只在 visit 内创建，
+        # 直接 MarketGame() + 选 X 会 AttributeError
+        self._pending_chain_steps = []
         self.palate = {           # 他记住的你的口味——初始空白，慢慢学
             "dislikes": {},       # 不吃：菜名→原因
             "loves": {},          # 爱吃：菜名→描述
@@ -5712,8 +5715,9 @@ class MarketGame:
                 for zn in ZONE_NAV:
                     if stall_id in zn or zn.replace("区", "") in stall_id:
                         return self.visit_zone(zn)
-            # 都不匹配——交给 visit_stall 让它报"没这个摊"
-            return self.visit_stall(stall_id)
+            # 都不匹配——直接报"没这个摊"，不要走 visit_stall("菜") 的模糊匹配
+            # 避免"去 菜"被 _find_stall 误匹配到"王姐蔬菜"
+            return "没这个摊。用「菜场」看所有摊，或「去 摊位id」精确逛。"
 
         # 买——支持批量：「买 番茄 2 鸡蛋 1」
         if instruction == "买":
@@ -6424,7 +6428,7 @@ class MarketGame:
                     candidates = [n for n, v in VEGGIES.items() if not v.get("_secret")]
                     if candidates:
                         gift_name = candidates[int(self.rng() * len(candidates)) % len(candidates)]
-                        self.basket.append({"name": gift_name, "quality": "great", "qty": 1, "price": 0, "stall": "gift", "owner": "摊主"})
+                        self.basket.append({"name": gift_name, "quality": "great", "qty": 1, "price": 0, "stall": "gift", "owner": "摊主", "_free": True})
                         self.encyclopedia["items_bought"].add(gift_name)
                 if reward.get("free_quality_item"):
                     cats = ["绿叶", "瓜果", "根茎"]
@@ -6432,7 +6436,9 @@ class MarketGame:
                     candidates = [n for n, v in VEGGIES.items() if v.get("cat") == cat and not v.get("_secret")]
                     if candidates:
                         gift_name = candidates[int(self.rng() * len(candidates)) % len(candidates)]
-                        self.basket.append({"name": gift_name, "quality": "great", "qty": 1, "price": 0, "stall": "found", "owner": ""})
+                        # _free=True 让 buy() 的"已经买了"检查能识别这是赠送的、
+                        # 不阻挡玩家主动再买一份（之前漏标，撞 buy 报"已经买了"）
+                        self.basket.append({"name": gift_name, "quality": "great", "qty": 1, "price": 0, "stall": "found", "owner": "", "_free": True})
                         self.encyclopedia["items_bought"].add(gift_name)
                 self.encyclopedia["encounters_triggered"].add(te["id"])
         return triggered
