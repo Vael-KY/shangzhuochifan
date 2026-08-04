@@ -2406,6 +2406,8 @@ class MarketGame:
         normalized = step_text.replace(" ", "").replace("　", "")
 
         ks["steps"].append(step_text)
+        # cooking_log 之前是死代码（init 了但谁都不写），把步骤也加进 history log
+        self.cooking_log.append(step_text)
         feedback = []
 
         # ── 锅的自然流逝 ──
@@ -6381,6 +6383,10 @@ class MarketGame:
             reward = ms.get("reward") or {}
             rtype = reward.get("type")
             rvalue = reward.get("value")
+            # 不同 reward 类型用不同 key：
+            # discount/perk 用 "value"；free_item 用 "item"；recipe 用 "recipe"
+            # 统一映射到 item_name 给 free_item 用
+            item_name = reward.get("item") or reward.get("value")
             rdesc = reward.get("desc", "摊主给了你一份心意")
             # 只处理安全的 reward 类型；其他先标触发但不执行动作
             if rtype == "discount":
@@ -6390,13 +6396,13 @@ class MarketGame:
                 if rvalue and rvalue > stall["_discount"]:
                     stall["_discount"] = rvalue
             elif rtype == "free_item":
-                # 免费给一样东西（rvalue 是食材名）
-                if rvalue and rvalue in VEGGIES:
+                # 免费给一样东西（用 item key 取食材名）
+                if item_name and item_name in VEGGIES:
                     self.basket.append({
-                        "name": rvalue, "quality": "great", "qty": 1,
+                        "name": item_name, "quality": "great", "qty": 1,
                         "price": 0, "stall": stall_id, "owner": owner, "_free": True,
                     })
-                    self.encyclopedia["items_bought"].add(rvalue)
+                    self.encyclopedia["items_bought"].add(item_name)
             elif rtype == "perk":
                 # 写入 _perks 集合（后续 perk 行为在用到时查 _perks）
                 if rvalue:
