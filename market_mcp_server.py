@@ -233,7 +233,7 @@ def run_sse(port=8878):
             )
 
     async def handle_messages(request):
-        await sse.handle_post_message(request._receive, request._send)
+        await sse.handle_post_message(request.scope, request.receive, request._send)
 
     starlette_app = Starlette(
         debug=False,
