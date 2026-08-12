@@ -1,1 +1,1 @@
-web: python market_mcp_server.py --sse --port 8878
+web: python market_mcp_server.py --sse --port ${PORT:-8878}
